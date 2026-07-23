@@ -1,0 +1,400 @@
+---
+title: "LAGOS_Disturbance_Final_SEM"
+author: "Sandeep Vemulapalli, Navid Ali, Patrick J. Hanly, and Xinyu Sun"
+output: html_document
+---
+
+## Read in packages and prepare data
+
+```{r }
+library(lavaan)
+library(dplyr)
+library(semPlot)
+library(car)
+library(corrplot)
+library(psych)
+library(MASS)
+
+# Read 2017 data, including added NLA and other information with missing data removed
+data <- read.csv("no_missing_NLA_final.csv")
+
+
+# transform data
+ids<-c("lagoslakeid", "UID", "lake_huc12", "neon_zoneid", "lake_lon_decdeg",             
+       "lake_lat_decdeg", "ws_zoneid")
+
+data_noid<-data %>%
+  dplyr::select(!all_of(ids))
+
+# transform predictors
+data_noid$lake_shorelinedevfactor<-log(data_noid$lake_shorelinedevfactor)
+data_noid$ws_area_ha<-log(data_noid$ws_area_ha)
+data_noid$value.soil_clay_pct<-log((data_noid$value.soil_clay_pct/100)/(1-(data_noid$value.soil_clay_pct/100)))
+data_noid$value.soil_depthtobedrock_cm<-log(data_noid$value.soil_depthtobedrock_cm+1)
+data_noid$value.soil_kffact<-log(data_noid$value.soil_kffact+1)
+data_noid$value.soil_orgcarbon_gperkg<-log(data_noid$value.soil_orgcarbon_gperkg+1)
+data_noid$nlcd_devsum_pct[data_noid$nlcd_devsum_pct >=99] <- 99
+data_noid$nlcd_devsum_pct[data_noid$nlcd_devsum_pct <=0.01] <- 0.01
+data_noid$nlcd_devsum_pct<-log((data_noid$nlcd_devsum_pct/100)/(1-(data_noid$nlcd_devsum_pct/100)))
+data_noid$ag_total[data_noid$ag_total <=0.01] <- 0.01
+data_noid$ag_total<-log((data_noid$ag_total/100)/(1-(data_noid$ag_total/100)))
+data_noid$value.runoff_inperyr<-log(data_noid$value.runoff_inperyr+1)
+data_noid$P_Ag_Buffered[data_noid$P_Ag_Buffered >=99] <- 99
+data_noid$P_Ag_Buffered[data_noid$P_Ag_Buffered <=0.01] <- 0.01
+data_noid$P_Ag_Buffered<-log((data_noid$P_Ag_Buffered/100)/(1-(data_noid$P_Ag_Buffered/100)))
+data_noid$DMR_Metals_TWPE_lb_eq_yr<-log(data_noid$DMR_Metals_TWPE_lb_eq_yr+1)
+data_noid$DMR_Organic_Enrichment_Disch<-log(data_noid$DMR_Organic_Enrichment_Disch+1)
+data_noid$Number_of_CSOs<-log(data_noid$Number_of_CSOs+1)
+data_noid$SNFA_MEAN<-log(data_noid$SNFA_MEAN+1)
+data_noid$PIMPV[data_noid$PIMPV <=0.01] <- 0.01
+data_noid$PIMPV<-log((data_noid$PIMPV/100)/(1-(data_noid$PIMPV/100)))
+data_noid$Manure_P_kg_ha<-log(data_noid$Manure_P_kg_ha+1)
+data_noid$HUC12_Pop<-log(data_noid$HUC12_Pop+1)
+data_noid$lake_waterarea_ha<-log(data_noid$lake_waterarea_ha)
+
+
+# transform response
+data_noid$mercury<-log(data_noid$mercury)
+data_noid$atrazine<-log(data_noid$atrazine+0.001)
+data_noid$microcystin<-log(data_noid$microcystin+0.001)
+data_noid$ecoli<-log(data_noid$ecoli+0.001)
+data_noid$chla<-log(data_noid$chla)
+data_noid$tp<-log(data_noid$tp)
+data_noid$tn<-log(data_noid$tn)
+data_noid$secchi<-log(data_noid$secchi)
+data_noid$DOC<-log(data_noid$DOC)
+data_noid$conductivity<-log(data_noid$conductivity)
+
+df<-data_noid
+
+# Numeric data is scaled to a mean of 0 and a standard deviation of 1 prior to SEM
+df <- df %>%
+  mutate_if(is.numeric, scale)
+
+```
+
+## Define final SEM model
+
+```{r}
+model_comb_improved <- '
+  #Human Disturbance
+  Urban_lake_disturbance =~ DMR_Organic_Enrichment_Disch + Number_of_CSOs + HUC12_Pop + PIMPV + nlcd_devsum_pct + DMR_Metals_TWPE_lb_eq_yr
+  
+  #Agricultural Flow
+  Agr_Ws_flow =~ SNFA_MEAN + ag_total + Manure_P_kg_ha + value.runoff_inperyr + P_Ag_Buffered
+  
+  #Natural Context
+  Soils =~ value.soil_clay_pct + value.soil_kffact + value.soil_depthtobedrock_cm + value.soil_orgcarbon_gperkg
+  
+  #Eutrophication
+  Eutrophication =~ chla + tp + tn + secchi
+  
+  #Industrial Disturbance
+  #industrial_disturbance =~  DMR_Metals_TWPE_lb_eq_yr 
+  
+  Morphometry =~ lake_shorelinedevfactor + lake_waterarea_ha + ws_area_ha 
+  
+  #Regressions
+  Eutrophication ~ Agr_Ws_flow + Soils + Urban_lake_disturbance + Morphometry
+  microcystin ~ Agr_Ws_flow + Soils + Urban_lake_disturbance + Morphometry
+  DOC ~ Agr_Ws_flow + Soils + Urban_lake_disturbance + Morphometry
+  conductivity ~ Agr_Ws_flow + Soils + Urban_lake_disturbance + Morphometry
+  mercury ~  Agr_Ws_flow + Soils + Urban_lake_disturbance + Morphometry
+  atrazine ~ Agr_Ws_flow + Soils + Urban_lake_disturbance + Morphometry
+  ecoli ~ Agr_Ws_flow + Soils + Urban_lake_disturbance + Morphometry
+
+  #Correlate error terms
+  DMR_Organic_Enrichment_Disch ~~ Number_of_CSOs
+  PIMPV ~~ nlcd_devsum_pct
+
+  #Add more correlated errors
+  Number_of_CSOs ~~ HUC12_Pop
+  
+'
+fit_comb <- sem(model_comb_improved , data = df, std.lv = TRUE, check.gradient = FALSE, sample.mean = TRUE) #Added sample mean for use in prediction function
+lavInspect(fit_comb, "cov.lv")
+summary(fit_comb, standardized = TRUE, rsq = 'T') #change the fit accordingly
+fitmeasures(fit_comb, c("gfi", "agfi", "nfi","cfi", "rmsea","srmr", "aic", "bic")) # Specify fit measures desired in output
+
+
+```
+
+## SEM Paths
+
+```{r}
+
+semPaths(fit_comb, "std", edge.label.cex = 0.8, exoCov = FALSE, fixedStyle = c( "white","0"))
+
+```
+
+## Import data for full predictors (i.e., including the landscape and other variables for lakes outside the NLA in-lake subset)
+
+```{r}
+### Read in full data and scale numeric values as done prior to SEM fit
+full_data <- read.csv("full_predictors_human_disturb_July2023.csv")
+full_data[full_data == "None"] <- 0 # Replace 'None' with 0
+
+
+full<-full_data
+
+# transform predictors
+full$lake_shorelinedevfactor<-log(full$lake_shorelinedevfactor)
+full$ws_area_ha<-log(full$ws_area_ha)
+full$value.soil_clay_pct[full$value.soil_clay_pct <=0.01] <- 0.01
+full$value.soil_clay_pct<-log((full$value.soil_clay_pct/100)/(1-(full$value.soil_clay_pct/100)))
+full$value.soil_depthtobedrock_cm<-log(full$value.soil_depthtobedrock_cm+1)
+full$value.soil_kffact<-log(full$value.soil_kffact+1)
+full$value.soil_orgcarbon_gperkg<-log(full$value.soil_orgcarbon_gperkg+1)
+full$nlcd_devsum_pct[full$nlcd_devsum_pct >=99] <- 99
+full$nlcd_devsum_pct[full$nlcd_devsum_pct <=0.01] <- 0.01
+full$nlcd_devsum_pct<-log((full$nlcd_devsum_pct/100)/(1-(full$nlcd_devsum_pct/100)))
+full$ag_total[full$ag_total <=0.01] <- 0.01
+full$ag_total[full$ag_total >=99] <- 99
+full$ag_total<-log((full$ag_total/100)/(1-(full$ag_total/100)))
+full$value.runoff_inperyr<-log(full$value.runoff_inperyr+1)
+full$P_Ag_Buffered <- as.numeric(full$P_Ag_Buffered)
+full$P_Ag_Buffered[full$P_Ag_Buffered >=99] <- 99
+full$P_Ag_Buffered[full$P_Ag_Buffered <=0.01] <- 0.01
+full$P_Ag_Buffered<-log((full$P_Ag_Buffered/100)/(1-(full$P_Ag_Buffered/100)))
+full$DMR_Metals_TWPE_lb_eq_yr<-as.numeric(full$DMR_Metals_TWPE_lb_eq_yr)
+full$DMR_Metals_TWPE_lb_eq_yr<-log(full$DMR_Metals_TWPE_lb_eq_yr+1)
+full$DMR_Organic_Enrichment_Disch<-as.numeric(full$DMR_Organic_Enrichment_Disch)
+full$DMR_Organic_Enrichment_Disch<-log(full$DMR_Organic_Enrichment_Disch+1)
+full$Number_of_CSOs<-as.numeric(full$Number_of_CSOs)
+full$Number_of_CSOs<-log(full$Number_of_CSOs+1)
+full$SNFA_MEAN<-log(full$SNFA_MEAN+1)
+full$PIMPV[full$PIMPV <=0.01] <- 0.01
+full$PIMPV<-log((full$PIMPV/100)/(1-(full$PIMPV/100)))
+full$Manure_P_kg_ha<-as.numeric(full$Manure_P_kg_ha)
+full$Manure_P_kg_ha<-log(full$Manure_P_kg_ha+1)
+full$HUC12_Pop<-log(full$HUC12_Pop+1)
+full$lake_waterarea_ha<-log(full$lake_waterarea_ha)
+
+
+
+```
+
+## Create and unscale predictions
+
+```{r}
+
+
+xn <- c("DMR_Organic_Enrichment_Disch", "Number_of_CSOs", "HUC12_Pop", "PIMPV", "nlcd_devsum_pct", "DMR_Metals_TWPE_lb_eq_yr",
+    "SNFA_MEAN", "ag_total", "Manure_P_kg_ha", "value.runoff_inperyr", "P_Ag_Buffered", "value.soil_clay_pct", "value.soil_kffact", "value.soil_depthtobedrock_cm", "value.soil_orgcarbon_gperkg", "lake_shorelinedevfactor", "lake_waterarea_ha", "ws_area_ha")
+
+### Scale predictors using sd and mean from the predictor data from 805 SEM data
+df1 <- data_noid #transformed but not scaled
+df1_means <- colMeans(df1)
+df1_sd <- sapply(df1, sd)
+df1_sd
+
+full.1 <- full[,c("lagoslakeid",xn)]
+summary(full.1)
+
+full.2<-full.1
+
+
+full.2$DMR_Organic_Enrichment_Disch <- (as.numeric(full.2$DMR_Organic_Enrichment_Disch) - df1_means["DMR_Organic_Enrichment_Disch"])/df1_sd["DMR_Organic_Enrichment_Disch"] 
+full.2$Number_of_CSOs <- (as.numeric(full.2$Number_of_CSOs) - df1_means["Number_of_CSOs"])/df1_sd["Number_of_CSOs"]
+full.2$HUC12_Pop <- (as.numeric(full.2$HUC12_Pop) - df1_means["HUC12_Pop"])/df1_sd["HUC12_Pop"]
+full.2$PIMPV <- (as.numeric(full.2$PIMPV) - df1_means["PIMPV"])/df1_sd["PIMPV"]
+full.2$nlcd_devsum_pct <- (as.numeric(full.2$nlcd_devsum_pct) - df1_means["nlcd_devsum_pct"])/df1_sd["nlcd_devsum_pct"]
+full.2$DMR_Metals_TWPE_lb_eq_yr <- (as.numeric(full.2$DMR_Metals_TWPE_lb_eq_yr) - df1_means["DMR_Metals_TWPE_lb_eq_yr"])/df1_sd["DMR_Metals_TWPE_lb_eq_yr"]
+full.2$SNFA_MEAN <- (as.numeric(full.2$SNFA_MEAN) - df1_means["SNFA_MEAN"])/df1_sd["SNFA_MEAN"]
+full.2$ag_total <- (as.numeric(full.2$ag_total) - df1_means["ag_total"])/df1_sd["ag_total"]
+full.2$Manure_P_kg_ha <- (as.numeric(full.2$Manure_P_kg_ha) - df1_means["Manure_P_kg_ha"])/df1_sd["Manure_P_kg_ha"]
+full.2$value.runoff_inperyr <- (as.numeric(full.2$value.runoff_inperyr) - df1_means["value.runoff_inperyr"])/df1_sd["value.runoff_inperyr"]
+full.2$P_Ag_Buffered <- (as.numeric(full.2$P_Ag_Buffered) - df1_means["P_Ag_Buffered"])/df1_sd["P_Ag_Buffered"]
+full.2$value.soil_clay_pct <- (as.numeric(full.2$value.soil_clay_pct) - df1_means["value.soil_clay_pct"])/df1_sd["value.soil_clay_pct"]
+full.2$value.soil_kffact <- (as.numeric(full.2$value.soil_kffact) - df1_means["value.soil_kffact"])/df1_sd["value.soil_kffact"]
+full.2$value.soil_depthtobedrock_cm <- (as.numeric(full.2$value.soil_depthtobedrock_cm) - df1_means["value.soil_depthtobedrock_cm"])/df1_sd["value.soil_depthtobedrock_cm"]
+full.2$value.soil_orgcarbon_gperkg <- (as.numeric(full.2$value.soil_orgcarbon_gperkg) - df1_means["value.soil_orgcarbon_gperkg"])/df1_sd["value.soil_orgcarbon_gperkg"]
+full.2$lake_shorelinedevfactor <- (as.numeric(full.2$lake_shorelinedevfactor) - df1_means["lake_shorelinedevfactor"])/df1_sd["lake_shorelinedevfactor"]
+full.2$lake_waterarea_ha <- (as.numeric(full.2$lake_waterarea_ha) - df1_means["lake_waterarea_ha"])/df1_sd["lake_waterarea_ha"]
+full.2$ws_area_ha <- (as.numeric(full.2$ws_area_ha) - df1_means["ws_area_ha"])/df1_sd["ws_area_ha"]
+
+
+```
+
+
+## Lambda corss-validation for lavpredictY_cv function
+
+```{r}
+### Specify columns for x
+xn <- c("DMR_Organic_Enrichment_Disch", "Number_of_CSOs", "HUC12_Pop", "PIMPV", "nlcd_devsum_pct", "DMR_Metals_TWPE_lb_eq_yr",
+    "SNFA_MEAN", "ag_total", "Manure_P_kg_ha", "value.runoff_inperyr", "P_Ag_Buffered", "value.soil_clay_pct", "value.soil_kffact", "value.soil_depthtobedrock_cm", "value.soil_orgcarbon_gperkg", "lake_shorelinedevfactor", "lake_waterarea_ha", "ws_area_ha")
+
+### Specify columns for y
+yn <- c("chla", "tp", "tn", "secchi", "ecoli", "atrazine", "mercury", "conductivity", "DOC", "microcystin")
+
+
+### Determine optimal lambda through cross-validation
+cv_pred <- lavPredictY_cv(fit_comb, data = df,
+              xnames = xn,
+              ynames = yn,
+              n.folds = 10L,
+              lambda.seq = seq(0, 1, 0.01))
+
+lam <- cv_pred$lambda.min
+lam
+```
+
+
+
+```{r}
+### Specify columns for x
+xn <- c("DMR_Organic_Enrichment_Disch", "Number_of_CSOs", "HUC12_Pop", "PIMPV", "nlcd_devsum_pct", "DMR_Metals_TWPE_lb_eq_yr",
+    "SNFA_MEAN", "ag_total", "Manure_P_kg_ha", "value.runoff_inperyr", "P_Ag_Buffered", "value.soil_clay_pct", "value.soil_kffact", "value.soil_depthtobedrock_cm", "value.soil_orgcarbon_gperkg", "lake_shorelinedevfactor", "lake_waterarea_ha", "ws_area_ha")
+
+### Specify columns for y
+yn <- c("chla", "tp", "tn", "secchi", "ecoli", "atrazine", "mercury", "conductivity", "DOC", "microcystin")
+
+full.2$chla <- NA
+full.2$tp <- NA
+full.2$tn <- NA
+full.2$secchi <- NA
+full.2$ecoli <- NA
+full.2$atrazine <- NA
+full.2$mercury <- NA
+full.2$conductivity <- NA
+full.2$DOC <- NA
+full.2$microcystin <- NA
+
+### Make predictions; add lagoslakeid
+out <- cbind(full.2[,c("lagoslakeid", xn)], lavPredictY(fit_comb, newdata = full.2, xnames = xn, ynames = yn, lambda = lam))
+colnames(out)[1] = "lagoslakeid"
+out_scaled <- out
+out_scaled <- as.data.frame(out_scaled)
+write.csv(out_scaled, file = "scaled_mean_predictions_output.csv", row.names=F)
+```
+
+```{r}
+out_latent <- cbind(out[complete.cases(out),], lavPredict(fit_comb, newdata = out[complete.cases(out),]))
+
+
+# adding residual variability estimated from the SEM to the predicted mean values
+theta <- inspect(fit_comb, "est")$theta
+theta_eutro <- theta[c("chla", "tp", "tn", "secchi"),
+                     c("chla", "tp", "tn", "secchi")]
+
+psi <- inspect(fit_comb, "est")$psi
+psi_response <- psi[c("microcystin",
+  "DOC",
+  "conductivity",
+  "mercury",
+  "atrazine",
+  "ecoli"),
+c("microcystin",
+  "DOC",
+  "conductivity",
+  "mercury",
+  "atrazine",
+  "ecoli")]
+
+
+eutro_vars <- c("chla", "tp", "tn", "secchi")
+
+response_vars <- c(
+  "microcystin",
+  "DOC",
+  "conductivity",
+  "mercury",
+  "atrazine",
+  "ecoli")
+
+all_vars <- c(eutro_vars, response_vars)
+
+Sigma <- matrix(0,
+  nrow = length(all_vars),
+  ncol = length(all_vars),
+  dimnames = list(all_vars, all_vars))
+
+## Fill eutrophication residual covariance
+Sigma[eutro_vars, eutro_vars] <- theta_eutro
+
+## Fill response residual covariance
+Sigma[response_vars, response_vars] <- psi_response
+
+
+pred <- lavPredictY(
+  fit_comb,
+  newdata = full.2,
+  xnames = xn,
+  ynames = yn,
+  lambda = lam)
+
+eps <- MASS::mvrnorm(
+  n = nrow(pred),
+  mu = rep(0, length(all_vars)),
+  Sigma = Sigma)
+
+pred_sim <- pred
+pred_sim[, all_vars] <- pred[, all_vars] + eps
+pred_sim <- as.data.frame(pred_sim)
+
+
+```
+
+
+
+
+```{r}
+
+### Unscale predictions using sd and mean from the y prediction data from SEM
+df2 <-df1 #transformed but not scaled
+df2_means <- colMeans(df2)
+df2_sd <- sapply(df2, sd)
+dim(out_latent)
+df2_sd
+df2_means
+
+pred_sim$chla <- as.numeric(pred_sim$chla) * df2_sd["chla"] + df2_means["chla"]
+pred_sim$tp <- as.numeric(pred_sim$tp) * df2_sd["tp"] + df2_means["tp"]
+pred_sim$tn <- as.numeric(pred_sim$tn) * df2_sd["tn"] + df2_means["tn"]
+pred_sim$secchi <- as.numeric(pred_sim$secchi) * df2_sd["secchi"] + df2_means["secchi"]
+pred_sim$ecoli <- as.numeric(pred_sim$ecoli) * df2_sd["ecoli"] + df2_means["ecoli"]
+pred_sim$atrazine <- as.numeric(pred_sim$atrazine) * df2_sd["atrazine"] + df2_means["atrazine"]
+pred_sim$mercury <- as.numeric(pred_sim$mercury) * df2_sd["mercury"] + df2_means["mercury"]
+pred_sim$conductivity <- as.numeric(pred_sim$conductivity) * df2_sd["conductivity"] + df2_means["conductivity"]
+pred_sim$DOC <- as.numeric(pred_sim$DOC) * df2_sd["DOC"] + df2_means["DOC"]
+pred_sim$microcystin <- as.numeric(pred_sim$microcystin) * df2_sd["microcystin"] + df2_means["microcystin"]
+
+summary(pred_sim)
+
+
+```
+
+
+## Bind predictions to the min/max from 2017 NLA
+
+```{r}
+### Write file of lakes with predictions bounded to the min and max from the 2017 NLA data
+pred_sim$chla[pred_sim$chla < min(df2$chla)] <- min(df2$chla)
+pred_sim$chla[pred_sim$chla > max(df2$chla)] <- max(df2$chla)
+pred_sim$tp[pred_sim$tp < min(df2$tp)] <- min(df2$tp)
+pred_sim$tp[pred_sim$tp > max(df2$tp)] <- max(df2$tp)
+pred_sim$tn[pred_sim$tn < min(df2$tn)] <- min(df2$tn)
+pred_sim$tn[pred_sim$tn > max(df2$tn)] <- max(df2$tn)
+pred_sim$secchi[pred_sim$secchi < min(df2$secchi)] <- min(df2$secchi)
+pred_sim$secchi[pred_sim$secchi > max(df2$secchi)] <- max(df2$secchi)
+pred_sim$ecoli[pred_sim$ecoli < min(df2$ecoli)] <- min(df2$ecoli)
+pred_sim$ecoli[pred_sim$ecoli > max(df2$ecoli)] <- max(df2$ecoli)
+pred_sim$atrazine[pred_sim$atrazine < min(df2$atrazine)] <- min(df2$atrazine)
+pred_sim$atrazine[pred_sim$atrazine > max(df2$atrazine)] <- max(df2$atrazine)
+pred_sim$mercury[pred_sim$mercury < min(df2$mercury)] <- min(df2$mercury)
+pred_sim$mercury[pred_sim$mercury > max(df2$mercury)] <- max(df2$mercury)
+pred_sim$conductivity[pred_sim$conductivity < min(df2$conductivity)] <- min(df2$conductivity)
+pred_sim$conductivity[pred_sim$conductivity > max(df2$conductivity)] <- max(df2$conductivity)
+pred_sim$DOC[pred_sim$DOC < min(df2$DOC)] <- min(df2$DOC)
+pred_sim$DOC[pred_sim$DOC > max(df2$DOC)] <- max(df2$DOC)
+pred_sim$microcystin[pred_sim$microcystin < min(df2$microcystin)] <- min(df2$microcystin)
+pred_sim$microcystin[pred_sim$microcystin > max(df2$microcystin)] <- max(df2$microcystin)
+
+pred_sim_latent<-cbind(out_latent[,c("lagoslakeid", "Urban_lake_disturbance",
+                                  "Agr_Ws_flow", "Soils", "Eutrophication",
+                                  "Morphometry")], pred_sim)
+
+write.csv(pred_sim_latent, file = "SEM_predictions_resid_sim.csv", row.names=F)
+```
+
+
